@@ -15,7 +15,7 @@ tensor the C++ engine needs, under descriptive names, plus all hyper-parameters 
 * Depthwise ConvNeXt kernels are stored as (K, C) so that tap k is one row of C values.
 * The latent encoder keeps only the `mu` half of its output projection.
 
-Weight types: f32, f16, q8_0, q5_0, q4_0. Only large matmul weights are quantized (row length a multiple of 32);
+Weight types: f32, f16, q8_0, q5_0 (q5_0 is not evaluated; 4-bit types were dropped after the evaluation). Only large matmul weights are quantized (row length a multiple of 32);
 norms, biases, embeddings, depthwise taps and the mel filterbank stay in F32, and matmul weights that cannot be
 quantized fall back to F16.
 """
@@ -40,9 +40,9 @@ RATE_CALIBRATION = [
     "Das Training läuft seit gestern Abend ohne Unterbrechung weiter.",
     "Draußen sind es zwölf Grad, und am Abend soll es regnen.",
 ]
-TYPES = {"f32": QT.F32, "f16": QT.F16, "q8_0": QT.Q8_0, "q5_0": QT.Q5_0, "q4_0": QT.Q4_0}
+TYPES = {"f32": QT.F32, "f16": QT.F16, "q8_0": QT.Q8_0, "q5_0": QT.Q5_0}
 # llama.cpp style file type ids, for tools that display them
-FILE_TYPE = {"f32": 0, "f16": 1, "q8_0": 7, "q5_0": 8, "q4_0": 2}
+FILE_TYPE = {"f32": 0, "f16": 1, "q8_0": 7, "q5_0": 8}
 
 
 def np32(t) -> np.ndarray:
@@ -78,7 +78,7 @@ class Collector:
             want = TYPES[self.voice_type]
         if self.enc_type and name.startswith("enc."):
             want = TYPES[self.enc_type]
-        if want in (QT.Q8_0, QT.Q5_0, QT.Q4_0):
+        if want in (QT.Q8_0, QT.Q5_0):
             if a.shape[1] % 32 != 0 or a.shape[0] < 32:
                 want = QT.F16                           # cannot be block-quantized (or too small to matter)
             elif want != QT.Q8_0 and TYPES[self.wtype] != QT.Q8_0 and any(name.startswith(p) for p in self.keep_q8):
@@ -157,14 +157,14 @@ def main():
     ap.add_argument("--vocoder", required=True, help="autoencoder checkpoint (vocoder-*.pt)")
     ap.add_argument("--type", default="f16", choices=sorted(TYPES), help="weight type for large matmul weights")
     ap.add_argument("--keep-q8", default="dec.head,dit.out.",
-                    help="comma-separated tensor name prefixes kept at Q8_0 in q4_0/q5_0 files ('' = none)")
+                    help="comma-separated tensor name prefixes kept at Q8_0 in q5_0 files ('' = none)")
     ap.add_argument("--keep-f16", default=r"^enc\.mu\.",
                     help="regex: matmul weights kept at F16 in quantized files (default: the latent projection of the "
                          "voice encoder, which has outlier inputs)")
     ap.add_argument("--voice-type", default=None, choices=sorted(TYPES),
                     help="type of the voice encoder (voice.*); default f16 in quantized files")
     ap.add_argument("--enc-type", default=None, choices=sorted(TYPES),
-                    help="type of the latent encoder (enc.*); default q8_0 in q4_0/q5_0 files, else --type")
+                    help="type of the latent encoder (enc.*); default q8_0 in q5_0 files, else --type")
     ap.add_argument("--only", default="", help="regex: quantize only these matmul weights (others F16); for experiments")
     ap.add_argument("-o", "--out", required=True)
     args = ap.parse_args()
@@ -181,9 +181,9 @@ def main():
     assert len(CHARSET) + 1 == cfg["v"]
 
     keep = {p for p in args.keep_q8.split(",") if p}
-    quant = args.type in ("q8_0", "q5_0", "q4_0")
+    quant = args.type in ("q8_0", "q5_0")
     voice_type = args.voice_type or ("f16" if quant else "")
-    enc_type = args.enc_type or ("q8_0" if args.type in ("q4_0", "q5_0") else "")
+    enc_type = args.enc_type or ("q8_0" if args.type == "q5_0" else "")
     c = Collector(args.type, keep, args.keep_f16, args.only, voice_type, enc_type)
 
     # ---------------- text encoder

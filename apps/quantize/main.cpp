@@ -1,15 +1,16 @@
 // articulino-quantize: requantize the matmul weights of an F32 (or F16) articulino GGUF with ggml's own quantizers,
-// including types the Python converter cannot write (IQ4_NL, K-quants).
+// including the K-quants, which the Python converter cannot write. 4-bit types are not offered: in our evaluation they
+// sounded measurably worse than F32 (see MODEL_CARD_GGUF.md); 8 bits is the smallest released precision.
 //
 //   articulino-quantize in-f32.gguf out.gguf TYPE [--voice TYPE] [--enc TYPE] [--keep TYPE:REGEX]...
 //
-// TYPE: f16 q8_0 q6_k q5_k q5_0 q4_k q4_0 iq4_nl. Matmul weights are 2-D tensors named *.weight with at least 32 rows;
+// TYPE: f16 q8_0 q6_k q5_k q5_0 (q6_k/q5_k/q5_0 are not evaluated). Matmul weights are 2-D tensors named *.weight with at least 32 rows;
 // everything else (norms, biases, embeddings, depthwise taps, mel filters) is copied unchanged. A weight whose row
-// length does not fit the block size falls back to the next type in: TYPE -> iq4_nl/q5_0/q8_0 -> f16.
+// length does not fit the block size falls back to the next type in: TYPE -> q5_0/q8_0 -> f16.
 // --voice sets the type of the voice encoder (voice.*, default f16) and --enc that of the latent encoder (enc.*, default
-// q8_0 for 4/5-bit types); both run once per voice, not per sentence.
+// q8_0 for 5-bit types); both run once per voice, not per sentence.
 // --keep TYPE:REGEX overrides the type for matching tensor names (first match wins; later --keep beats the defaults).
-// Defaults: enc.mu stays F16 in every file (its inputs have outliers); in 4/5-bit files dit.out and dec.head stay q8_0.
+// Defaults: enc.mu stays F16 in every file (its inputs have outliers); in 5-bit files dit.out and dec.head stay q8_0.
 #include "ggml.h"
 #include "gguf.h"
 
@@ -24,8 +25,7 @@
 static ggml_type parse_type(const std::string & s) {
     static const std::map<std::string, ggml_type> m = {
         { "f32", GGML_TYPE_F32 }, { "f16", GGML_TYPE_F16 }, { "q8_0", GGML_TYPE_Q8_0 }, { "q6_k", GGML_TYPE_Q6_K },
-        { "q5_k", GGML_TYPE_Q5_K }, { "q5_0", GGML_TYPE_Q5_0 }, { "q4_k", GGML_TYPE_Q4_K }, { "q4_0", GGML_TYPE_Q4_0 },
-        { "iq4_nl", GGML_TYPE_IQ4_NL },
+        { "q5_k", GGML_TYPE_Q5_K }, { "q5_0", GGML_TYPE_Q5_0 },
     };
     auto it = m.find(s);
     if (it == m.end()) { std::fprintf(stderr, "unknown type %s\n", s.c_str()); std::exit(2); }
@@ -34,10 +34,9 @@ static ggml_type parse_type(const std::string & s) {
 
 static ggml_type fallback(ggml_type t) {
     switch (t) {
-        case GGML_TYPE_Q4_K: return GGML_TYPE_IQ4_NL;
         case GGML_TYPE_Q5_K: return GGML_TYPE_Q5_0;
         case GGML_TYPE_Q6_K: return GGML_TYPE_Q8_0;
-        case GGML_TYPE_IQ4_NL: case GGML_TYPE_Q4_0: case GGML_TYPE_Q5_0: case GGML_TYPE_Q8_0: return GGML_TYPE_F16;
+        case GGML_TYPE_Q5_0: case GGML_TYPE_Q8_0: return GGML_TYPE_F16;
         default: return GGML_TYPE_F16;
     }
 }

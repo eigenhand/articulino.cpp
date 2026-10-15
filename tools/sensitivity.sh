@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quantization sensitivity: quantize one group of matmul weights at a time (rest F16) and print the SNR of the
-# stage it feeds. Usage: tools/sensitivity.sh q8_0|q4_0 [vectors]   (run from the repository root, after building)
+# stage it feeds. Usage: tools/sensitivity.sh q8_0|q5_0 [vectors]   (run from the repository root, after building)
 # Needs the training checkpoints: CHECKPOINTS=<folder with schueler-dmd1-020000.pt and vocoder-d1-020000.pt>
 T=${1:-q8_0}; VEC=${2:-build/vectors/de_sentence.vectors.gguf}
 D=${CHECKPOINTS:?set CHECKPOINTS}; PY=${PYTHON:-python}

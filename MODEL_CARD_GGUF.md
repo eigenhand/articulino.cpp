@@ -23,7 +23,7 @@ tags:
 
 **GGUF files of [Articulino-DE-EN-Realtime-Stream-TTS](https://huggingface.co/eigenhand/Articulino-DE-EN-Realtime-Stream-TTS)
 for [articulino.cpp](https://github.com/eigenhand/articulino.cpp): German and English text to speech with zero-shot voice cloning, in C++, without
-Python: 33 times faster than real time on 12 CPU threads with the recommended 8-bit file, 52 times with 4 bit.**
+Python: 33 times faster than real time on 12 CPU threads with the recommended 8-bit file, 135 times with Vulkan.**
 
 Each file holds the complete model in one piece: text encoder, duration predictor, voice encoder, the 4-step DMD2
 student DiT, the latent encoder for the voice reference, and the decoder (Vocos-style, inverse STFT), with all settings
@@ -31,29 +31,25 @@ as GGUF metadata. The weights are the same as in the main repository; only their
 
 | File | Size | Weights | Speed, 12 CPU threads¹ | Notes |
 |---|---|---|---|---|
-| `articulino-iq4_nl.gguf` | 104 MB | 4 bit (IQ4_NL) | 52× | fastest on CPUs; slightly lower quality (UTMOS −0.05, see Quality) |
-| `articulino-q4_0.gguf` | 104 MB | 4 bit (Q4_0) | 52× | not recommended: lower quality and speaker similarity than IQ4_NL at the same speed |
 | `articulino-q8_0.gguf` | 137 MB | 8 bit (Q8_0) | 33× | **recommended**: equivalent to F32 in every measure, a third of the size |
 | `articulino-f16.gguf` | 220 MB | 16 bit float | 26× | half the download of F32, computed in F32 after loading |
 | `articulino-f32.gguf` | 438 MB | 32 bit float | 26× | reference; matches PyTorch to float rounding |
 
 ¹ Times real time for the whole pipeline per sentence, on 12 efficiency cores of an Intel Core i9-14900K (in a VM).
-The PyTorch release reaches 24.9× on the same cores. With 2 threads: IQ4_NL 11.2×, Q8_0 6.9×, F32 6.0×
-(PyTorch 8.3×).
+The PyTorch release reaches 24.9× on the same cores. With 2 threads: Q8_0 6.9×, F32 6.0×
+(PyTorch 8.3×). There are no 4-bit files: they were understood as well as F32 but sounded measurably worse
+(UTMOS 0.05–0.07 lower), so 8 bits is the smallest precision released.
 
 | File | 12 threads | 8 threads | 4 threads | 2 threads | First sentence (12 threads) |
 |---|---|---|---|---|---|
 | F32 | 25.9× | 20.7× | 11.5× | 6.0× | 0.18 s |
 | F16 | 25.7× | 20.3× | 11.5× | 6.0× | 0.18 s |
 | Q8_0 | 32.7× | 24.8× | 13.3× | 6.9× | 0.14 s |
-| Q4_0 | 52.0× | 38.9× | 21.5× | 11.4× | 0.08 s |
-| IQ4_NL | 52.4× | 39.3× | 21.6× | 11.2× | 0.09 s |
 | PyTorch F32, for comparison | 24.9× | 20.6× | 12.9× | 8.3× | 0.20 s |
 | Any file, Vulkan on an AMD Radeon AI PRO R9700 | 135–138× | | | | 0.03 s |
 
-In the quantized files, norms, biases, embeddings and the voice encoder (which runs once per voice) keep 16 or 32 bits;
-in the 4-bit files the latent encoder, the DiT output layer and the decoder head keep 8 bits. Everything that runs per
-sentence uses the file's type.
+In the Q8_0 file, norms, biases, embeddings and the voice encoder (which runs once per voice) keep 16 or 32 bits.
+Everything that runs per sentence uses the file's type.
 
 ## Quickstart
 
@@ -93,10 +89,7 @@ CER, ECAPA cosine to the voice prompt for similarity, UTMOS for quality; 95 % bo
 | F32 | 4.72 % [3.90, 5.59] | 1.84 % [1.46, 2.24] | 0.659 [0.649, 0.669] | 3.30 [3.27, 3.34] |
 | F16 | 4.70 % [3.87, 5.56] | 1.83 % [1.45, 2.24] | 0.659 [0.649, 0.669] | 3.30 [3.27, 3.34] |
 | **Q8_0** | **4.67 %** [3.85, 5.50] | **1.79 %** [1.42, 2.19] | **0.659** [0.649, 0.669] | **3.30** [3.26, 3.33] |
-| Q4_0 | 4.93 % [4.08, 5.81] | 1.88 % [1.50, 2.29] | 0.653 [0.643, 0.664] | 3.24 [3.20, 3.27] |
-| IQ4_NL | 5.10 % [4.18, 6.03] | 1.98 % [1.55, 2.46] | 0.657 [0.646, 0.667] | 3.25 [3.22, 3.29] |
 | F32, Vulkan (R9700) | 4.75 % [3.92, 5.60] | 1.81 % [1.44, 2.21] | 0.659 [0.649, 0.670] | 3.30 [3.27, 3.34] |
-| IQ4_NL, Vulkan (R9700) | 4.97 % [4.09, 5.89] | 1.95 % [1.53, 2.41] | 0.657 [0.646, 0.667] | 3.25 [3.22, 3.29] |
 
 | English (107) | WER | CER | Similarity | UTMOS |
 |---|---|---|---|---|
@@ -104,16 +97,12 @@ CER, ECAPA cosine to the voice prompt for similarity, UTMOS for quality; 95 % bo
 | F32 | 2.13 % [1.42, 2.94] | 0.85 % [0.55, 1.19] | 0.590 [0.577, 0.603] | 4.28 [4.26, 4.30] |
 | F16 | 2.09 % [1.38, 2.89] | 0.85 % [0.54, 1.20] | 0.590 [0.577, 0.603] | 4.28 [4.26, 4.30] |
 | **Q8_0** | **2.25 %** [1.52, 3.08] | **0.91 %** [0.58, 1.27] | **0.591** [0.578, 0.604] | **4.27** [4.25, 4.29] |
-| Q4_0 | 2.43 % [1.70, 3.26] | 1.01 % [0.66, 1.40] | 0.581 [0.567, 0.595] | 4.25 [4.23, 4.27] |
-| IQ4_NL | 2.24 % [1.50, 3.10] | 0.97 % [0.59, 1.42] | 0.594 [0.581, 0.607] | 4.26 [4.24, 4.28] |
 
 | Pronunciation suite (129) | CER, Whisper, 3 seeds | Correct in all seeds | Parakeet (seed 0): correct |
 |---|---|---|---|
 | PyTorch reference | 1.41 % | 116 | 122 |
 | F32 / F16 | 1.41 % / 1.41 % | 116 / 116 | 122 / 123 |
 | Q8_0 | 1.27 % | 118 | 121 |
-| Q4_0 | 1.54 % | 116 | 118 |
-| IQ4_NL | 1.39 % | 116 | 122 |
 
 **Equivalence to the reference.** A file counts as equivalent when the 90 % interval of every paired difference lies
 inside the margins fixed before the measurement (±1.0 point WER, ±0.5 point CER, ±0.01 similarity, ±0.05 UTMOS);
@@ -124,16 +113,12 @@ inside the margins fixed before the measurement (±1.0 point WER, ±0.5 point CE
 | F32 | 0.00 [0.00, 0.00] | 0.000 | 0.000 | equivalent | equivalent | equivalent |
 | F16 | −0.02 [−0.08, 0.02] | 0.000 | −0.002 | equivalent | equivalent | equivalent |
 | **Q8_0** | −0.06 [−0.26, 0.15] | 0.000 | −0.004 | **equivalent** | **equivalent** | **equivalent** |
-| Q4_0 | +0.20 [−0.12, 0.53] | −0.006 [−0.008, −0.003] | −0.066 [−0.079, −0.052] | **different**: similarity, UTMOS | not equivalent: similarity −0.009 | **different**: similarity −0.014, UTMOS −0.05 |
-| IQ4_NL | +0.37 [−0.02, 0.79] | −0.002 | −0.050 [−0.064, −0.036] | **different**: UTMOS | equivalent | not equivalent: similarity +0.006 (higher) |
 | F32, Vulkan | +0.02 [−0.08, 0.13] | 0.000 | −0.000 | equivalent | equivalent | equivalent |
-| IQ4_NL, Vulkan | +0.24 [−0.10, 0.62] | −0.002 | −0.052 [−0.066, −0.039] | **different**: UTMOS | not equivalent: similarity +0.007 (higher) | not equivalent: similarity +0.006 (higher) |
 
-**What this means.** F16, Q8_0 and the Vulkan path speak like F32. The 4-bit files are understood as well as F32
-(no significant change in WER or CER, and the pronunciation suite stays as correct), but they sound measurably
-worse: German UTMOS drops by 0.05 (IQ4_NL) to 0.07 (Q4_0), consistently and significantly, and Q4_0 also loses speaker
-similarity. The change is small next to the difference between voices, but it is real; we therefore recommend
-**Q8_0**, and IQ4_NL only where the extra speed matters. Q4_0 is dominated by IQ4_NL.
+**What this means.** F16, Q8_0 and the Vulkan path speak like F32 on every set and every measure, so Q8_0 is the
+recommended file. 4-bit versions (Q4_0, IQ4_NL) went through the same evaluation and were dropped: they were
+understood as well as F32, but German UTMOS was 0.05–0.07 lower (significant after Holm correction), and Q4_0 also lost
+some speaker similarity.
 
 **Fidelity.** Median log-mel distance to the reference output; another seed of the reference itself differs by
 5.9 dB (German), 5.5 dB (English) and 5.5 dB (suite).
@@ -143,13 +128,10 @@ similarity. The change is small next to the difference between voices, but it is
 | F32 | 0.00 / 0.00 / 0.00 dB | 100 % |
 | F16 | 0.07 / 0.10 / 0.06 dB | 100 % |
 | Q8_0 | 1.34 / 1.42 / 1.24 dB | 81 % |
-| Q4_0 | 4.10 / 3.93 / 3.94 dB | 24 % |
-| IQ4_NL | 4.03 / 4.12 / 3.78 dB | 28 % |
 | F32, Vulkan (R9700) | 0.40 / 0.48 / 0.35 dB | 94 % |
-| IQ4_NL, Vulkan (R9700) | 4.04 / 4.04 / 3.80 dB | 23 % |
 
-**Building blocks.** Same inputs, signal-to-noise ratio of one DiT step against float32: F16 69 dB, Q8_0 36 dB,
-Q4_0 18 dB, IQ4_NL 19 dB; the decoder's spectrum deviates by 0.002 / 0.13 / 0.60 / 0.53 dB on average. The full tables
+**Building blocks.** Same inputs, signal-to-noise ratio of one DiT step against float32: F16 69 dB, Q8_0 36 dB; the
+decoder's spectrum deviates by 0.002 / 0.13 dB on average. The full tables
 are in the engine's README.
 
 The F32 file reproduces the PyTorch reference: every building block within 1e-5 relative error, and the whole chain

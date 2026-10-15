@@ -2,12 +2,12 @@
 
 C++ inference engine for **Articulino-DE-EN-Realtime-Stream-TTS**, the small German and English text-to-speech model
 with zero-shot voice cloning. It runs on [ggml](https://github.com/ggml-org/ggml), loads a single GGUF file, needs no
-Python at run time, and is fast on ordinary CPUs: with 4-bit weights it speaks about 50 times faster than real time on
-12 efficiency cores.
+Python at run time, and is fast on ordinary CPUs: with 8-bit weights it speaks 33 times faster than real time on
+12 efficiency cores, and 135 to 138 times with Vulkan on a GPU.
 
 - the whole pipeline in C++: voice WAV → log-mel → latent encoder → voice tokens and prompt cache; text → letters →
   text encoder → durations → 4-step DiT sampler → Vocos-style decoder → inverse STFT → 24 kHz
-- one GGUF file per weight type: F32, F16, Q8_0, Q4_0, IQ4_NL
+- one GGUF file per weight type: F32, F16, Q8_0
 - C API (`include/articulino.h`) with per-sentence streaming, and a command line tool
 - matches the reference PyTorch code to float32 rounding (see [Parity](#parity))
 
@@ -147,23 +147,20 @@ settings, rate calibration sentences).
 | `articulino-f32.gguf` | 438 MB | F32 | reference; matches PyTorch to float rounding |
 | `articulino-f16.gguf` | 220 MB | F16 | half the download; widened to F32 when loading (x86 has no F16 arithmetic), so it runs like F32 |
 | `articulino-q8_0.gguf` | 137 MB | Q8_0 | **recommended**: 8 bit, equivalent to F32 on unseen speakers (WER, similarity, UTMOS) |
-| `articulino-q4_0.gguf` | 104 MB | Q4_0 | 4 bit, written by the Python converter; lower quality and similarity than IQ4_NL |
-| `articulino-iq4_nl.gguf` | 104 MB | IQ4_NL | fastest: 4 bit with non-linear levels, more accurate than Q4_0; UTMOS 0.05 below F32 |
 
 Quantized files keep precision where it is cheap or needed: norms, biases, embeddings and depthwise kernels stay F32;
 the voice encoder (`voice.*`, runs once per voice) stays F16, and the latent projection of the latent encoder
-(`enc.mu`, outlier inputs) stays F16; in the 4-bit files the latent encoder (`enc.*`), the DiT output projection and
-the decoder head stay Q8_0. Everything that runs per sentence (text encoder, durations, DiT, decoder) uses the file's
-type. On x86 with AVX2 (and on ARM with dot-product instructions) the 4-bit weights are repacked at load time into
-ggml's interleaved layout (`CPU_REPACK`), which is what makes them fast.
+(`enc.mu`, outlier inputs) stays F16. Everything that runs per sentence (text encoder, durations, DiT, decoder) uses
+the file's type. There are no 4-bit files: in our evaluation they were understood as well as F32 but sounded
+measurably worse (see the model card).
 
 ### Converting and quantizing
 
 ```bash
 pip install torch numpy gguf
 python tools/convert_to_gguf.py --student schueler-dmd1-020000.pt --vocoder vocoder-d1-020000.pt \
-    --type f32 -o articulino-f32.gguf            # also f16, q8_0, q5_0, q4_0
-build/articulino-quantize articulino-f32.gguf articulino-iq4_nl.gguf iq4_nl   # also q4_k, q5_k, q6_k, ...
+    --type f32 -o articulino-f32.gguf            # also f16, q8_0
+build/articulino-quantize articulino-f32.gguf articulino-q8_0.gguf q8_0   # ggml's quantizer (also q6_k, q5_k, q5_0: not evaluated)
 ```
 
 The converter reads the two training checkpoints (student acoustic model and latent autoencoder). Tensor layout:
@@ -200,16 +197,16 @@ decoder output agrees to 120 dB.
 For the quantized files the SNR of every stage (same reference inputs, German sentence; the DiT and decoder rows are
 what changes the sound):
 
-| Stage | F16 | Q8_0 | Q4_0 | IQ4_NL |
-|---|---|---|---|---|
-| latent encoder (mu) | 73 dB | 47 dB | 47 dB | 47 dB |
-| voice tokens | 63 dB | 63 dB | 63 dB | 63 dB |
-| prompt cache k | 76 dB | 43 dB | 23 dB | 24 dB |
-| text encoder | 77 dB | 44 dB | 24 dB | 25 dB |
-| log durations | 81 dB | 47 dB | 34 dB | 33 dB |
-| DiT velocity (one step) | 69 dB | 36 dB | 18 dB | 19 dB |
-| 4 chained steps (latents) | 65 dB | 30 dB | 10 dB | 17 dB |
-| decoder: waveform SNR / mean log-mel deviation | 67 dB / 0.002 dB | 32 dB / 0.13 dB | 16 dB / 0.60 dB | 19 dB / 0.53 dB |
+| Stage | F16 | Q8_0 |
+|---|---|---|
+| latent encoder (mu) | 73 dB | 47 dB |
+| voice tokens | 63 dB | 63 dB |
+| prompt cache k | 76 dB | 43 dB |
+| text encoder | 77 dB | 44 dB |
+| log durations | 81 dB | 47 dB |
+| DiT velocity (one step) | 69 dB | 36 dB |
+| 4 chained steps (latents) | 65 dB | 30 dB |
+| decoder: waveform SNR / mean log-mel deviation | 67 dB / 0.002 dB | 32 dB / 0.13 dB |
 
 F16 is computed in F32 after loading (the weights are widened), so only the 16-bit rounding of the weights remains.
 
@@ -227,10 +224,8 @@ front; speaker similarity is the ECAPA cosine to the voice reference (speechbrai
 | F32 | 0.0 % | 0.617 |
 | F16 | 0.0 % | 0.616 |
 | Q8_0 | 0.0 % | 0.624 |
-| Q4_0 | 0.0 % | 0.620 |
-| IQ4_NL | 0.0 % | 0.644 |
 
-An English sentence pair is recognised word for word from F32, Q8_0 and IQ4_NL. With four sentences, differences in
+An English sentence pair is recognised word for word from F32 and Q8_0. With four sentences, differences in
 similarity of ±0.03 are noise.
 
 ## Speed
@@ -246,17 +241,14 @@ shared these cores; `tools/bench.sh` waits for idle cores before each run). Repr
 |---|---|---|---|---|---|
 | F32 | 25.9× | 20.7× | 11.5× | 6.0× | 0.18 s |
 | F16 | 25.7× | 20.3× | 11.5× | 6.0× | 0.18 s |
-| Q8_0 | 32.7× | 24.8× | 13.3× | 6.9× | 0.14 s |
-| Q4_0 | 52.0× | 38.9× | 21.5× | 11.4× | 0.08 s |
-| **IQ4_NL** | **52.4×** | **39.3×** | **21.6×** | **11.2×** | 0.09 s |
+| **Q8_0** | **32.7×** | **24.8×** | **13.3×** | **6.9×** | 0.14 s |
 | PyTorch F32 (reference) | 24.9× | 20.6× | 12.9× | 8.3× | 0.20 s |
 
-At few threads ggml's float32 matmul reaches less of the cores' peak than PyTorch's (MKL/oneDNN); the 4-bit files make
-up for it with less memory traffic and the repacked AVX2 kernels.
+At few threads ggml's float32 matmul reaches less of the cores' peak than PyTorch's (MKL/oneDNN); Q8_0 makes up for
+part of it with less memory traffic.
 
-Where the time goes (IQ4_NL, 12 threads, per sentence of ~4 s): text encoder and durations ~6 ms, DiT 4 steps ~37 ms,
-decoder ~34 ms, inverse STFT and filter < 1 ms; the artifact check of the default settings adds about 1 ms. Setting a
-voice (latent encoder, voice encoder, voice cache, rate calibration) takes 0.1–0.15 s.
+The artifact check of the default settings adds about 1 ms per sentence. Setting a voice (latent encoder, voice
+encoder, voice cache, rate calibration) takes 0.1–0.15 s.
 
 ## GPU (Vulkan)
 
@@ -270,16 +262,15 @@ runs on the GPU in one piece.
 |---|---|---|
 | F32 / F16 | 138× | 0.03 s |
 | Q8_0 | 135× | 0.03 s |
-| IQ4_NL | 136× | 0.03 s |
 
 On the GPU the weight type hardly matters: the model is small and the time goes into launching kernels (DiT ~19 ms,
 decoder ~7 ms per sentence). ggml's Vulkan matmuls round to 16-bit floats internally, so even the F32 file agrees with
 PyTorch only to about 60–65 dB per stage (decoder spectrum 0.004 dB); the four German test sentences are recognised
-without errors (F32 and IQ4_NL, similarity to the voice 0.618 and 0.645). Other GPUs and backends are untested.
+without errors (F32, similarity to the voice 0.618). Other GPUs and backends are untested.
 
 ## How it is built
 
-- `src/model.cpp`: GGUF loading, weight placement (default CPU buffer, or the repack buffer for 4-bit), thread pool
+- `src/model.cpp`: GGUF loading, weight placement (default CPU buffer, or ggml's repack buffer where a type supports it), thread pool
 - `src/nn.cpp`: the networks as ggml graphs; activations are `[channels, time]`. The four sampler steps run in one
   graph; the prompt's keys/values, the voice tokens' cross-attention keys/values and the AdaNorm scale/shift of every
   block at the four sampler times are computed once per voice
@@ -293,7 +284,7 @@ without errors (F32 and IQ4_NL, similarity to the voice 0.618 and 0.645). Other 
 Development tools: `tests/test_parity.cpp`, `tests/check_text.py` (normalizer and splitter against Python),
 `tests/asr_check.py` (Parakeet), `tests/similarity.py` (ECAPA), `tools/bench.sh`, `tools/sensitivity.sh` (per-layer
 quantization sensitivity). `ARTICULINO_PROFILE=1` prints the time per ggml op (single-threaded runs are meaningful),
-`ARTICULINO_NO_REPACK=1` keeps 4-bit weights in the plain layout, `ARTICULINO_GENERIC_OPS=1` uses plain ggml ops
+`ARTICULINO_NO_REPACK=1` keeps quantized weights in the plain layout, `ARTICULINO_GENERIC_OPS=1` uses plain ggml ops
 instead of the fused ones.
 
 ## Limitations
