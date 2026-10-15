@@ -23,7 +23,7 @@ tags:
 
 **GGUF files of [Articulino-DE-EN-Realtime-Stream-TTS](https://huggingface.co/eigenhand/Articulino-DE-EN-Realtime-Stream-TTS)
 for [articulino.cpp](https://github.com/eigenhand/articulino.cpp): German and English text to speech with zero-shot voice cloning, in C++, without
-Python, about 50 times faster than real time on CPU cores.**
+Python: 33 times faster than real time on 12 CPU threads with the recommended 8-bit file, 52 times with 4 bit.**
 
 Each file holds the complete model in one piece: text encoder, duration predictor, voice encoder, the 4-step DMD2
 student DiT, the latent encoder for the voice reference, and the decoder (Vocos-style, inverse STFT), with all settings
@@ -31,9 +31,9 @@ as GGUF metadata. The weights are the same as in the main repository; only their
 
 | File | Size | Weights | Speed, 12 CPU threads¹ | Notes |
 |---|---|---|---|---|
-| `articulino-iq4_nl.gguf` | 104 MB | 4 bit (IQ4_NL) | 52× | fastest on CPUs; renders differ more from F32 (see Quality) |
-| `articulino-q4_0.gguf` | 104 MB | 4 bit (Q4_0) | 52× | the classic 4-bit type |
-| `articulino-q8_0.gguf` | 137 MB | 8 bit (Q8_0) | 33× | close to F32 at a third of the size |
+| `articulino-iq4_nl.gguf` | 104 MB | 4 bit (IQ4_NL) | 52× | fastest on CPUs; slightly lower quality (UTMOS −0.05, see Quality) |
+| `articulino-q4_0.gguf` | 104 MB | 4 bit (Q4_0) | 52× | not recommended: lower quality and speaker similarity than IQ4_NL at the same speed |
+| `articulino-q8_0.gguf` | 137 MB | 8 bit (Q8_0) | 33× | **recommended**: equivalent to F32 in every measure, a third of the size |
 | `articulino-f16.gguf` | 220 MB | 16 bit float | 26× | half the download of F32, computed in F32 after loading |
 | `articulino-f32.gguf` | 438 MB | 32 bit float | 26× | reference; matches PyTorch to float rounding |
 
@@ -60,9 +60,9 @@ sentence uses the file's type.
 ```bash
 git clone --recursive https://github.com/eigenhand/articulino.cpp
 cmake -S articulino.cpp -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-huggingface-cli download eigenhand/Articulino-DE-EN-Realtime-Stream-TTS-GGUF articulino-iq4_nl.gguf --local-dir .
+hf download eigenhand/Articulino-DE-EN-Realtime-Stream-TTS-GGUF articulino-q8_0.gguf --local-dir .
 
-build/articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav --threads 8 \
+build/articulino-cli -m articulino-q8_0.gguf --voice voice.wav --threads 8 \
     -t "Guten Morgen! Der Termin ist heute um fünfzehn Uhr dreißig." -o morgen.wav
 ```
 
@@ -70,7 +70,7 @@ build/articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav --threads 8 \
 resampled). Streaming from a language model:
 
 ```bash
-my-llm | build/articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav --stdin -o - | aplay -r 24000 -f S16_LE -c 1
+my-llm | build/articulino-cli -m articulino-q8_0.gguf --voice voice.wav --stdin -o - | aplay -r 24000 -f S16_LE -c 1
 ```
 
 Every sentence is spoken as soon as it is complete. The engine also has a C API (`articulino.h`) with a per-sentence
@@ -84,27 +84,69 @@ of the Python release does that. Words in the other language can be marked: `Das
 
 **Unseen speakers.** Every file spoke the test sets of the main card's evaluation with **the same noise** as the
 PyTorch reference: 320 German utterances from 160 speakers and 107 English utterances from 4 speakers that the model
-never saw (three seeds each), and the 129-sentence German pronunciation suite. Fidelity is the median log-mel
-distance to the reference output; for scale, another seed of the reference itself differs by 5.9 dB (German), 5.5 dB
-(English) and 5.5 dB (suite). "Same length" is the share of utterances with exactly the same number of frames.
+never saw (three seeds each), and the 129-sentence German pronunciation suite. Whisper large-v3 (beam 5) for WER and
+CER, ECAPA cosine to the voice prompt for similarity, UTMOS for quality; 95 % bootstrap intervals over utterances.
 
-| File | Log-mel distance, German / English / suite | Same length (German) | Pronunciation suite, Parakeet: sentences correct | Suite CER |
+| German (320) | WER | CER | Similarity | UTMOS |
 |---|---|---|---|---|
-| PyTorch reference | 0 | 100 % | 122 / 129 | 2.29 % |
-| F32 | 0.00 / 0.00 / 0.00 dB | 100 % | 122 / 129 | 2.29 % |
-| F16 | 0.07 / 0.10 / 0.06 dB | 100 % | 123 / 129 | 2.16 % |
-| Q8_0 | 1.34 / 1.42 / 1.24 dB | 81 % | 121 / 129 | 2.22 % |
-| Q4_0 | 4.10 / 3.93 / 3.94 dB | 24 % | 118 / 129 | 1.97 % |
-| IQ4_NL | 4.03 / 4.12 / 3.78 dB | 28 % | 122 / 129 | 1.42 % |
-| F32, Vulkan (R9700) | 0.40 / 0.48 / 0.35 dB | 94 % | 122 / 129 | 2.01 % |
-| IQ4_NL, Vulkan (R9700) | 4.04 / 4.04 / 3.80 dB | 23 % | 123 / 129 | 1.16 % |
+| PyTorch reference | 4.72 % [3.90, 5.59] | 1.84 % [1.46, 2.24] | 0.659 [0.649, 0.669] | 3.30 [3.27, 3.34] |
+| F32 | 4.72 % [3.90, 5.59] | 1.84 % [1.46, 2.24] | 0.659 [0.649, 0.669] | 3.30 [3.27, 3.34] |
+| F16 | 4.70 % [3.87, 5.56] | 1.83 % [1.45, 2.24] | 0.659 [0.649, 0.669] | 3.30 [3.27, 3.34] |
+| **Q8_0** | **4.67 %** [3.85, 5.50] | **1.79 %** [1.42, 2.19] | **0.659** [0.649, 0.669] | **3.30** [3.26, 3.33] |
+| Q4_0 | 4.93 % [4.08, 5.81] | 1.88 % [1.50, 2.29] | 0.653 [0.643, 0.664] | 3.24 [3.20, 3.27] |
+| IQ4_NL | 5.10 % [4.18, 6.03] | 1.98 % [1.55, 2.46] | 0.657 [0.646, 0.667] | 3.25 [3.22, 3.29] |
+| F32, Vulkan (R9700) | 4.75 % [3.92, 5.60] | 1.81 % [1.44, 2.21] | 0.659 [0.649, 0.670] | 3.30 [3.27, 3.34] |
+| IQ4_NL, Vulkan (R9700) | 4.97 % [4.09, 5.89] | 1.95 % [1.53, 2.41] | 0.657 [0.646, 0.667] | 3.25 [3.22, 3.29] |
 
-F32 and F16 give the reference output. Q8_0 changes it a little (a quarter of a seed change). The two 4-bit files
-render most sentences noticeably differently (two thirds of a seed change, other phrase lengths in three of four
-utterances), while the pronunciation suite stays as correct as with F32. **Word error rate, speaker similarity and
-UTMOS of these files on the unseen speakers are being measured** with the same protocol as the ONNX and PyTorch
-variants (which were all equivalent to the reference); this card will be updated with the results. Until then, use
-Q8_0 or F16 where the voice must match F32 exactly, and listen before choosing a 4-bit file.
+| English (107) | WER | CER | Similarity | UTMOS |
+|---|---|---|---|---|
+| PyTorch reference | 2.12 % [1.40, 2.92] | 0.85 % [0.55, 1.19] | 0.590 [0.577, 0.603] | 4.28 [4.26, 4.30] |
+| F32 | 2.13 % [1.42, 2.94] | 0.85 % [0.55, 1.19] | 0.590 [0.577, 0.603] | 4.28 [4.26, 4.30] |
+| F16 | 2.09 % [1.38, 2.89] | 0.85 % [0.54, 1.20] | 0.590 [0.577, 0.603] | 4.28 [4.26, 4.30] |
+| **Q8_0** | **2.25 %** [1.52, 3.08] | **0.91 %** [0.58, 1.27] | **0.591** [0.578, 0.604] | **4.27** [4.25, 4.29] |
+| Q4_0 | 2.43 % [1.70, 3.26] | 1.01 % [0.66, 1.40] | 0.581 [0.567, 0.595] | 4.25 [4.23, 4.27] |
+| IQ4_NL | 2.24 % [1.50, 3.10] | 0.97 % [0.59, 1.42] | 0.594 [0.581, 0.607] | 4.26 [4.24, 4.28] |
+
+| Pronunciation suite (129) | CER, Whisper, 3 seeds | Correct in all seeds | Parakeet (seed 0): correct |
+|---|---|---|---|
+| PyTorch reference | 1.41 % | 116 | 122 |
+| F32 / F16 | 1.41 % / 1.41 % | 116 / 116 | 122 / 123 |
+| Q8_0 | 1.27 % | 118 | 121 |
+| Q4_0 | 1.54 % | 116 | 118 |
+| IQ4_NL | 1.39 % | 116 | 122 |
+
+**Equivalence to the reference.** A file counts as equivalent when the 90 % interval of every paired difference lies
+inside the margins fixed before the measurement (±1.0 point WER, ±0.5 point CER, ±0.01 similarity, ±0.05 UTMOS);
+"different" means a significant paired difference (Wilcoxon, Holm-corrected).
+
+| File | ΔWER German (points) | ΔSimilarity German | ΔUTMOS German | German | English | Suite |
+|---|---|---|---|---|---|---|
+| F32 | 0.00 [0.00, 0.00] | 0.000 | 0.000 | equivalent | equivalent | equivalent |
+| F16 | −0.02 [−0.08, 0.02] | 0.000 | −0.002 | equivalent | equivalent | equivalent |
+| **Q8_0** | −0.06 [−0.26, 0.15] | 0.000 | −0.004 | **equivalent** | **equivalent** | **equivalent** |
+| Q4_0 | +0.20 [−0.12, 0.53] | −0.006 [−0.008, −0.003] | −0.066 [−0.079, −0.052] | **different**: similarity, UTMOS | not equivalent: similarity −0.009 | **different**: similarity −0.014, UTMOS −0.05 |
+| IQ4_NL | +0.37 [−0.02, 0.79] | −0.002 | −0.050 [−0.064, −0.036] | **different**: UTMOS | equivalent | not equivalent: similarity +0.006 (higher) |
+| F32, Vulkan | +0.02 [−0.08, 0.13] | 0.000 | −0.000 | equivalent | equivalent | equivalent |
+| IQ4_NL, Vulkan | +0.24 [−0.10, 0.62] | −0.002 | −0.052 [−0.066, −0.039] | **different**: UTMOS | not equivalent: similarity +0.007 (higher) | not equivalent: similarity +0.006 (higher) |
+
+**What this means.** F16, Q8_0 and the Vulkan path speak like F32. The 4-bit files are understood as well as F32
+(no significant change in WER or CER, and the pronunciation suite stays as correct), but they sound measurably
+worse: German UTMOS drops by 0.05 (IQ4_NL) to 0.07 (Q4_0), consistently and significantly, and Q4_0 also loses speaker
+similarity. The change is small next to the difference between voices, but it is real; we therefore recommend
+**Q8_0**, and IQ4_NL only where the extra speed matters. Q4_0 is dominated by IQ4_NL.
+
+**Fidelity.** Median log-mel distance to the reference output; another seed of the reference itself differs by
+5.9 dB (German), 5.5 dB (English) and 5.5 dB (suite).
+
+| File | Log-mel distance, German / English / suite | Same number of frames (German) |
+|---|---|---|
+| F32 | 0.00 / 0.00 / 0.00 dB | 100 % |
+| F16 | 0.07 / 0.10 / 0.06 dB | 100 % |
+| Q8_0 | 1.34 / 1.42 / 1.24 dB | 81 % |
+| Q4_0 | 4.10 / 3.93 / 3.94 dB | 24 % |
+| IQ4_NL | 4.03 / 4.12 / 3.78 dB | 28 % |
+| F32, Vulkan (R9700) | 0.40 / 0.48 / 0.35 dB | 94 % |
+| IQ4_NL, Vulkan (R9700) | 4.04 / 4.04 / 3.80 dB | 23 % |
 
 **Building blocks.** Same inputs, signal-to-noise ratio of one DiT step against float32: F16 69 dB, Q8_0 36 dB,
 Q4_0 18 dB, IQ4_NL 19 dB; the decoder's spectrum deviates by 0.002 / 0.13 / 0.60 / 0.53 dB on average. The full tables

@@ -40,14 +40,14 @@ API is exported; ggml is linked in statically) and the tests.
 
 ```bash
 # a text with several sentences -> WAV
-articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav \
+articulino-cli -m articulino-q8_0.gguf --voice voice.wav \
     -t "Guten Morgen! Der Termin ist heute um fünfzehn Uhr dreißig." -o out.wav --threads 8
 
 # English
-articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav --lang en -t "The delivery arrives tomorrow." -o en.wav
+articulino-cli -m articulino-q8_0.gguf --voice voice.wav --lang en -t "The delivery arrives tomorrow." -o en.wav
 
 # streaming: text arrives on stdin piece by piece, every finished sentence is spoken at once (raw PCM on stdout)
-my-llm | articulino-cli -m articulino-iq4_nl.gguf --voice voice.wav --stdin -o - | aplay -r 24000 -f S16_LE -c 1
+my-llm | articulino-cli -m articulino-q8_0.gguf --voice voice.wav --stdin -o - | aplay -r 24000 -f S16_LE -c 1
 ```
 
 | Option | Meaning |
@@ -104,7 +104,7 @@ static int on_audio(const float * samples, size_t n, const char * sentence, void
 int main(void) {
     articulino_params p = articulino_default_params();
     p.n_threads = 8;
-    articulino_context * ctx = articulino_load("articulino-iq4_nl.gguf", &p);
+    articulino_context * ctx = articulino_load("articulino-q8_0.gguf", &p);
     if (!ctx) { fprintf(stderr, "%s\n", articulino_last_error()); return 1; }
     articulino_set_voice_file(ctx, "voice.wav");          /* voice cache: computed once, reused for every sentence */
 
@@ -146,9 +146,9 @@ settings, rate calibration sentences).
 |---|---|---|---|
 | `articulino-f32.gguf` | 438 MB | F32 | reference; matches PyTorch to float rounding |
 | `articulino-f16.gguf` | 220 MB | F16 | half the download; widened to F32 when loading (x86 has no F16 arithmetic), so it runs like F32 |
-| `articulino-q8_0.gguf` | 137 MB | Q8_0 | 8 bit |
-| `articulino-q4_0.gguf` | 104 MB | Q4_0 | 4 bit, written by the Python converter |
-| `articulino-iq4_nl.gguf` | 104 MB | IQ4_NL | **recommended**: 4 bit with non-linear levels, more accurate than Q4_0 at the same size and speed |
+| `articulino-q8_0.gguf` | 137 MB | Q8_0 | **recommended**: 8 bit, equivalent to F32 on unseen speakers (WER, similarity, UTMOS) |
+| `articulino-q4_0.gguf` | 104 MB | Q4_0 | 4 bit, written by the Python converter; lower quality and similarity than IQ4_NL |
+| `articulino-iq4_nl.gguf` | 104 MB | IQ4_NL | fastest: 4 bit with non-linear levels, more accurate than Q4_0; UTMOS 0.05 below F32 |
 
 Quantized files keep precision where it is cheap or needed: norms, biases, embeddings and depthwise kernels stay F32;
 the voice encoder (`voice.*`, runs once per voice) stays F16, and the latent projection of the latent encoder
